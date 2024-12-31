@@ -17,9 +17,9 @@ import { TwabController } from "pt-v5-twab-controller/TwabController.sol";
 /// @dev The TWAB supply limit is the max number of shares that can be minted in the TWAB controller.
 uint256 constant TWAB_SUPPLY_LIMIT = type(uint96).max;
 
-/// @title  PoolTogether V5 Prize Vault
-/// @author G9 Software Inc.
-/// @notice The prize vault takes deposits of an asset and earns yield with the deposits through an underlying yield
+/// @title  Fund Vault
+/// @author MyEVM.
+/// @notice The vault takes deposits of an asset and earns yield with the deposits through an underlying yield
 ///         vault. The yield is then expected to be liquidated and contributed to the prize pool as prize tokens. The
 ///         depositors of the prize vault will then be eligible to win prizes from the pool. If a prize is won, The 
 ///         permitted claimer contract for the prize vault will claim the prize on behalf of the winner. Depositors
@@ -29,8 +29,7 @@ uint256 constant TWAB_SUPPLY_LIMIT = type(uint96).max;
 ///         global withdrawal limits meet or exceed their balance. However, if the underlying yield source loses
 ///         assets, depositors will only be able to withdraw a proportional amount of remaining assets based on their
 ///         share balance and the total debt balance.
-/// @dev    The prize vault is designed to embody the "no loss" spirit of PoolTogether, down to the last wei. Most 
-///         ERC4626 yield vaults incur small, necessary rounding errors on deposit and withdrawal to ensure the
+/// @dev    Most ERC4626 yield vaults incur small, necessary rounding errors on deposit and withdrawal to ensure the
 ///         internal accounting cannot be taken advantage of. The prize vault employs two strategies in an attempt
 ///         to cover these rounding errors with yield to ensure that depositors can withdraw every last wei of their
 ///         initial deposit:
@@ -73,11 +72,15 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     // Public Constants and Variables
     ////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice The IPFS hash or similar identifier for the vault image.
+    string public vaultImageHash;
+
+
     /// @notice The yield fee decimal precision.
     uint32 public constant FEE_PRECISION = 1e9;
     
     /// @notice The max yield fee that can be set.
-    /// @dev Decimal precision is defined by `FEE_PRECISION`.
+    /// @dev Decimal precision is defined by FEE_PRECISION.
     /// @dev If the yield fee is set too high, liquidations won't occur on a regular basis. If a use case requires
     /// a yield fee higher than this max, a custom liquidation pair can be set to manipulate the yield as required.
     uint32 public constant MAX_YIELD_FEE = 9e8;
@@ -117,8 +120,8 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     /// @notice Address of the underlying ERC4626 vault generating yield.
     IERC4626 public immutable yieldVault;
 
-    /// @notice Yield fee percentage represented in integer format with decimal precision defined by `FEE_PRECISION`.
-    /// @dev For example, if `FEE_PRECISION` were 1e9 a value of 1e7 = 0.01 = 1%.
+    /// @notice Yield fee percentage represented in integer format with decimal precision defined by FEE_PRECISION.
+    /// @dev For example, if FEE_PRECISION were 1e9 a value of 1e7 = 0.01 = 1%.
     uint32 public yieldFeePercentage;
 
     /// @notice Address of the yield fee recipient.
@@ -143,6 +146,12 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     ////////////////////////////////////////////////////////////////////////////////
     // Events
     ////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Emitted when the vault image hash is updated.
+    /// @param previousHash The previous image hash.
+    /// @param newHash The new image hash set by the owner.
+    event VaultImageHashUpdated(string previousHash, string newHash);
+
 
     /// @notice Emitted when a new yield fee recipient has been set.
     /// @param yieldFeeRecipient Address of the new yield fee recipient
@@ -193,7 +202,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     /// @notice Thrown when zero shares are being minted
     error MintZeroShares();
 
-    /// @notice Thrown if `totalAssets` is zero during a withdraw
+    /// @notice Thrown if totalAssets is zero during a withdraw
     error ZeroTotalAssets();
 
     /// @notice Thrown when the Liquidation Pair being set is the zero address.
@@ -349,7 +358,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     /// @inheritdoc IERC4626
     /// @dev The latent asset balance is included in the total asset count to account for the "dust collection
     /// strategy".
-    /// @dev This function uses `convertToAssets` to ensure it does not revert, but may result in some
+    /// @dev This function uses convertToAssets to ensure it does not revert, but may result in some
     /// approximation depending on the yield vault implementation.
     function totalAssets() public view returns (uint256) {
         return yieldVault.convertToAssets(yieldVault.balanceOf(address(this))) + _asset.balanceOf(address(this));
@@ -372,8 +381,8 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     /// @dev Returns zero if any deposit would result in a loss of assets
     /// @dev Returns zero if total assets cannot be determined
     /// @dev Returns zero if the yield buffer is less than half full. This is a safety precaution to ensure
-    /// a deposit of the asset amount returned by this function cannot reasonably trigger a `LossyDeposit`
-    /// revert in the `deposit` or `mint` functions if the yield buffer has been configured properly.
+    /// a deposit of the asset amount returned by this function cannot reasonably trigger a LossyDeposit
+    /// revert in the deposit or mint functions if the yield buffer has been configured properly.
     /// @dev Any latent balance of assets in the prize vault will be swept in with the deposit as a part of
     /// the "dust collection strategy". This means that the max deposit must account for the latent balance
     /// by subtracting it from the max deposit available otherwise.
@@ -398,7 +407,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @inheritdoc IERC4626
-    /// @dev Returns the same value as `maxDeposit` since shares and assets are 1:1 on mint
+    /// @dev Returns the same value as maxDeposit since shares and assets are 1:1 on mint
     /// @dev Returns zero if any deposit would result in a loss of assets
     function maxMint(address _owner) external view returns (uint256) {
         return maxDeposit(_owner);
@@ -438,7 +447,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
             // Convert to shares while rounding up. Since 1 asset is guaranteed to be worth more than
             // 1 share and any upwards rounding will not exceed 1 share, we can be sure that when the
             // shares are converted back to assets (rounding down) the resulting asset value won't
-            // exceed `_maxWithdraw`.
+            // exceed _maxWithdraw.
             uint256 _maxScaledRedeem = _convertToShares(_maxWithdraw, _totalAssets, totalDebt(), Math.Rounding.Up);
             return _maxScaledRedeem >= _ownerShares ? _ownerShares : _maxScaledRedeem;
         } else {
@@ -459,7 +468,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @inheritdoc IERC4626
-    /// @dev Reverts if `totalAssets` in the vault is zero
+    /// @dev Reverts if totalAssets in the vault is zero
     function previewWithdraw(uint256 _assets) public view returns (uint256) {
         uint256 _totalAssets = totalPreciseAssets();
 
@@ -514,16 +523,16 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     // Additional Deposit Flows
     ////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Approve underlying asset with permit, deposit into the Vault and mint Vault shares to `_owner`.
-    /// @dev Can't be used to deposit on behalf of another user since `permit` does not accept a receiver parameter,
+    /// @notice Approve underlying asset with permit, deposit into the Vault and mint Vault shares to _owner.
+    /// @dev Can't be used to deposit on behalf of another user since permit does not accept a receiver parameter,
     /// meaning that anyone could reuse the signature and pass an arbitrary receiver to this function.
     /// @param _assets Amount of assets to approve and deposit
-    /// @param _owner Address of the owner depositing `_assets` and signing the permit
+    /// @param _owner Address of the owner depositing _assets and signing the permit
     /// @param _deadline Timestamp after which the approval is no longer valid
     /// @param _v V part of the secp256k1 signature
     /// @param _r R part of the secp256k1 signature
     /// @param _s S part of the secp256k1 signature
-    /// @return Amount of Vault shares minted to `_owner`.
+    /// @return Amount of Vault shares minted to _owner.
     function depositWithPermit(
         uint256 _assets,
         address _owner,
@@ -552,10 +561,10 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     // Additional Withdrawal Flows
     ////////////////////////////////////////////////////////////////////////////////
 
-    /// @notice Alternate flow for `IERC4626.withdraw` that reverts if the max share limit is exceeded.
-    /// @param _assets See `IERC4626.withdraw`
-    /// @param _receiver See `IERC4626.withdraw`
-    /// @param _owner See `IERC4626.withdraw`
+    /// @notice Alternate flow for IERC4626.withdraw that reverts if the max share limit is exceeded.
+    /// @param _assets See IERC4626.withdraw
+    /// @param _receiver See IERC4626.withdraw
+    /// @param _owner See IERC4626.withdraw
     /// @param _maxShares The max shares that can be burned for the withdrawal to succeed.
     /// @return The amount of shares burned for the withdrawal
     function withdraw(
@@ -570,11 +579,11 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
         return _shares;
     }
 
-    /// @notice Alternate flow for `IERC4626.redeem` that reverts if the assets returned does not reach the
+    /// @notice Alternate flow for IERC4626.redeem that reverts if the assets returned does not reach the
     /// minimum asset threshold.
-    /// @param _shares See `IERC4626.redeem`
-    /// @param _receiver See `IERC4626.redeem`
-    /// @param _owner See `IERC4626.redeem`
+    /// @param _shares See IERC4626.redeem
+    /// @param _receiver See IERC4626.redeem
+    /// @param _owner See IERC4626.redeem
     /// @param _minAssets The minimum assets that can be returned for the redemption to succeed
     /// @return The amount of assets returned for the redemption
     function redeem(
@@ -602,9 +611,9 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     /// @notice Calculates the amount of assets the vault controls based on current onchain conditions.
     /// @dev The latent asset balance is included in the total asset count to account for the "dust collection
     /// strategy".
-    /// @dev This function should be favored over `totalAssets` for state-changing functions since it uses
-    /// `previewRedeem` over `convertToAssets`.
-    /// @dev May revert for reasons that would cause `yieldVault.previewRedeem` to revert.
+    /// @dev This function should be favored over totalAssets for state-changing functions since it uses
+    /// previewRedeem over convertToAssets.
+    /// @dev May revert for reasons that would cause yieldVault.previewRedeem to revert.
     /// @return The total assets controlled by the vault based on current onchain conditions
     function totalPreciseAssets() public view returns (uint256) {
         return yieldVault.previewRedeem(yieldVault.balanceOf(address(this))) + _asset.balanceOf(address(this));
@@ -642,7 +651,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
 
     /// @notice Transfers yield fee shares to the yield fee recipient
     /// @param _shares The shares to mint to the yield fee recipient
-    /// @dev Emits a `ClaimYieldFeeShares` event
+    /// @dev Emits a ClaimYieldFeeShares event
     /// @dev Will revert if the caller is not the yield fee recipient or if zero shares are withdrawn
     function claimYieldFeeShares(uint256 _shares) external onlyYieldFeeRecipient {
         if (_shares == 0) revert MintZeroShares();
@@ -660,7 +669,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     ////////////////////////////////////////////////////////////////////////////////
 
     /// @inheritdoc ILiquidationSource
-    /// @dev Returns the liquid amount of `_tokenOut` minus any yield fees.
+    /// @dev Returns the liquid amount of _tokenOut minus any yield fees.
     /// @dev Supports the liquidation of either assets or prize vault shares.
     function liquidatableBalanceOf(address _tokenOut) external view returns (uint256) {
         uint256 _totalDebt = totalDebt();
@@ -685,7 +694,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
         }
 
         // The liquid yield is limited by the max that can be minted or withdrawn, depending on
-        // `_tokenOut`.
+        // _tokenOut.
         uint256 _availableYield = _availableYieldBalance(totalPreciseAssets(), _totalDebt);
         uint256 _liquidYield = _availableYield >= _maxAmountOut ? _maxAmountOut : _availableYield;
 
@@ -696,7 +705,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @inheritdoc ILiquidationSource
-    /// @dev Emits a `TransferYieldOut` event
+    /// @dev Emits a TransferYieldOut event
     /// @dev Supports the liquidation of either assets or prize vault shares.
     function transferTokensOut(
         address /* sender */,
@@ -714,7 +723,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
         uint256 _yieldFee;
         if (_yieldFeePercentage != 0) {
             // The yield fee is calculated as a portion of the total yield being consumed, such that 
-            // `total = amountOut + yieldFee` and `yieldFee / total = yieldFeePercentage`. 
+            // total = amountOut + yieldFee and yieldFee / total = yieldFeePercentage. 
             _yieldFee = (_amountOut * FEE_PRECISION) / (FEE_PRECISION - _yieldFeePercentage) - _amountOut;
         }
 
@@ -728,7 +737,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
             yieldFeeBalance = yieldFeeBalance + _yieldFee;
         }
 
-        // Mint or withdraw amountOut to `_receiver`:
+        // Mint or withdraw amountOut to _receiver:
         if (_tokenOut == address(_asset)) {
             _enforceMintLimit(_totalDebtBefore, _yieldFee);
             _withdraw(_receiver, _amountOut);
@@ -775,6 +784,23 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     // Setter Functions
     ////////////////////////////////////////////////////////////////////////////////
 
+    /// @notice Allows the owner to update the vault image hash.
+    /// @param _newHash The new IPFS hash or identifier for the vault image.
+    function setVaultImageHash(string calldata _newHash) external onlyOwner {
+        string memory previousHash = vaultImageHash;
+        vaultImageHash = _newHash;
+        emit VaultImageHashUpdated(previousHash, _newHash);
+    }
+
+    /// @notice Returns the full URL of the vault's image.
+    /// @dev Concatenates the base URL with the vaultImageHash.
+    /// @return The full URL to the vault image.
+    function getVaultImage() external view returns (string memory) {
+        string memory baseURL = "https://ipfs.io/ipfs/";
+        return string(abi.encodePacked(baseURL, vaultImageHash));
+    }
+
+
     /// @notice Set claimer.
     /// @param _claimer Address of the claimer
     function setClaimer(address _claimer) external onlyOwner {
@@ -782,7 +808,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @notice Set liquidationPair.
-    /// @dev Emits a `LiquidationPairSet` event
+    /// @dev Emits a LiquidationPairSet event
     /// @param _liquidationPair New liquidationPair address
     function setLiquidationPair(address _liquidationPair) external onlyOwner {
         if (address(_liquidationPair) == address(0)) revert LPZeroAddress();
@@ -793,7 +819,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @notice Set yield fee percentage.
-    /// @dev Yield fee is defined on a scale from `0` to `FEE_PRECISION`, inclusive.
+    /// @dev Yield fee is defined on a scale from 0 to FEE_PRECISION, inclusive.
     /// @param _yieldFeePercentage The new yield fee percentage to set
     function setYieldFeePercentage(uint32 _yieldFeePercentage) external onlyOwner {
         _setYieldFeePercentage(_yieldFeePercentage);
@@ -828,7 +854,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @notice Calculates the amount of assets the vault controls based on current onchain conditions.
-    /// @dev Calls `totalPreciseAssets` externally so it can catch `previewRedeem` failures and return
+    /// @dev Calls totalPreciseAssets externally so it can catch previewRedeem failures and return
     /// whether or not the call was successful.
     /// @return _success Returns true if totalAssets was successfully calculated and false otherwise
     /// @return _totalAssets The total assets controlled by the vault based on current onchain conditions
@@ -945,15 +971,15 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     /// @param _receiver The receiver of the deposit shares
     /// @param _assets Amount of assets to deposit
     /// @param _shares Amount of shares to mint
-    /// @dev Emits a `Deposit` event.
+    /// @dev Emits a Deposit event.
     /// @dev Will revert if 0 shares are minted back to the receiver or if 0 assets are deposited.
     /// @dev Will revert if the deposit may result in the loss of funds.
     function _depositAndMint(address _caller, address _receiver, uint256 _assets, uint256 _shares) internal {
         if (_shares == 0) revert MintZeroShares();
         if (_assets == 0) revert DepositZeroAssets();
 
-        // If _asset is ERC777, `transferFrom` can trigger a reentrancy BEFORE the transfer happens through the
-        // `tokensToSend` hook. On the other hand, the `tokenReceived` hook that is triggered after the transfer
+        // If _asset is ERC777, transferFrom can trigger a reentrancy BEFORE the transfer happens through the
+        // tokensToSend hook. On the other hand, the tokenReceived hook that is triggered after the transfer
         // calls the vault which is assumed to not be malicious.
         //
         // Conclusion: we need to do the transfer before we mint so that any reentrancy would happen before the
@@ -991,7 +1017,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     /// @param _owner Owner of the shares
     /// @param _shares Shares to burn
     /// @param _assets Assets to withdraw
-    /// @dev Emits a `Withdraw` event.
+    /// @dev Emits a Withdraw event.
     /// @dev Will revert if 0 assets are withdrawn or if 0 shares are burned
     function _burnAndWithdraw(
         address _caller,
@@ -1006,8 +1032,8 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
             _spendAllowance(_owner, _caller, _shares);
         }
 
-        // If _asset is ERC777, `transfer` can trigger a reentrancy AFTER the transfer happens through the
-        // `tokensReceived` hook. On the other hand, the `tokensToSend` hook, that is triggered before the transfer,
+        // If _asset is ERC777, transfer can trigger a reentrancy AFTER the transfer happens through the
+        // tokensReceived hook. On the other hand, the tokensToSend hook, that is triggered before the transfer,
         // calls the vault, which is assumed not malicious.
         //
         // Conclusion: we need to do the transfer after the burn so that any reentrancy would happen after the
@@ -1019,14 +1045,14 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @notice Returns the max assets that can be withdrawn from the yield vault through this vault's
-    /// `_withdraw` function.
-    /// @dev This should be used over `yieldVault.maxWithdraw` when considering withdrawal limits since
+    /// _withdraw function.
+    /// @dev This should be used over yieldVault.maxWithdraw when considering withdrawal limits since
     /// this function takes into account the yield vault redemption limits, which is necessary since the
-    /// `_withdraw` function uses `yieldVault.redeem` instead of `yieldVault.withdraw`. Since we convert
-    /// the max redeemable shares to assets rounding down, the `yieldVault.previewWithdraw` call in the
-    /// `_withdraw` function is guaranteed to return less than or equal shares to the max yield vault 
+    /// _withdraw function uses yieldVault.redeem instead of yieldVault.withdraw. Since we convert
+    /// the max redeemable shares to assets rounding down, the yieldVault.previewWithdraw call in the
+    /// _withdraw function is guaranteed to return less than or equal shares to the max yield vault 
     /// redemption.
-    /// @dev Returns zero if `yieldVault.previewRedeem` reverts.
+    /// @dev Returns zero if yieldVault.previewRedeem reverts.
     /// @return The max assets that can be withdrawn from the yield vault.
     function _maxYieldVaultWithdraw() internal view returns (uint256) {
         try yieldVault.previewRedeem(yieldVault.maxRedeem(address(this))) returns (uint256 _maxAssets) {
@@ -1055,8 +1081,8 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @notice Set yield fee percentage.
-    /// @dev Yield fee is defined on a scale from `0` to `MAX_YIELD_FEE`, inclusive.
-    /// @dev Emits a `YieldFeePercentageSet` event
+    /// @dev Yield fee is defined on a scale from 0 to MAX_YIELD_FEE, inclusive.
+    /// @dev Emits a YieldFeePercentageSet event
     /// @param _yieldFeePercentage The new yield fee percentage to set
     function _setYieldFeePercentage(uint32 _yieldFeePercentage) internal {
         if (_yieldFeePercentage > MAX_YIELD_FEE) {
@@ -1067,7 +1093,7 @@ contract PrizeVault is TwabERC20, Claimable, IERC4626, ILiquidationSource, Ownab
     }
 
     /// @notice Set yield fee recipient address.
-    /// @dev Emits a `YieldFeeRecipientSet` event
+    /// @dev Emits a YieldFeeRecipientSet event
     /// @param _yieldFeeRecipient Address of the fee recipient
     function _setYieldFeeRecipient(address _yieldFeeRecipient) internal {
         yieldFeeRecipient = _yieldFeeRecipient;
